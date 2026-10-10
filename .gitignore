@@ -1,0 +1,9 @@
+bot/.env
+bot/node_modules/
+
+lavalink/Lavalink.jar
+lavalink/logs/
+lavalink/plugins/*.tmp
+
+*.log
+.DS_Store

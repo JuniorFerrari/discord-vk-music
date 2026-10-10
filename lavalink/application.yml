@@ -1,0 +1,27 @@
+server:
+  port: 2333
+
+lavalink:
+  server:
+    password: "local-dev-password"
+
+  plugins:
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.2"
+      snapshot: false
+
+plugins:
+  lavasrc:
+    sources:
+      youtube: false
+      spotify: false
+      applemusic: false
+      deezer: false
+      yandexmusic: false
+      flowerytts: false
+      vkmusic: true
+
+    vkmusic:
+      userToken: "vk1.a.lwBvB0hdCpzpX0bHCEaJUD_xT4I3DQmn30sQroGcQGkLt1AZTHFWF82LB7nYCscCAVuDr96Adl4vdg2x1Vr4dKH5jwmIVX1avoX7fACuJDT5GNl97DCxOsIXseOSEE5QCtrqeHbniES5tg8JBVkXu4LQkct7GvBtCd5qlbDJX9YH-ja-9-EXzmRReXAp5ZgSxkdkU0QemJVtEz2a59tE6w"
+      playlistLoadLimit: 1
+      artistLoadLimit: 1
+      recommendationsLoadLimit: 10 
