@@ -1,6 +1,6 @@
 # Discord VK Music Bot
 
-Discord music bot for playing VK tracks through Lavalink and Shoukaku.
+Discord music bot for playing VK and YouTube tracks through Lavalink and Shoukaku.
 
 ## Setup
 
@@ -37,7 +37,7 @@ node index.js
 
 ## Commands
 
-- `/play` - search and queue a VK track or playlist.
+- `/play` - search YouTube or queue a VK/YouTube track or playlist by link.
 - `/queue` - show the current queue.
 - `/nowplaying` - show the current track.
 - `/skip` - skip the current track.

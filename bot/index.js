@@ -47,6 +47,7 @@ const shoukaku = new Shoukaku(
 );
 
 const queues = new Map();
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 shoukaku.on('ready', (name) => {
     console.log(`Lavalink подключён: ${name}`);
@@ -75,11 +76,11 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Найти и воспроизвести музыку из VK')
+        .setDescription('Найти и воспроизвести музыку из VK или YouTube')
         .addStringOption(option =>
             option
                 .setName('query')
-                .setDescription('Название песни или ссылка VK')
+                .setDescription('Название песни или ссылка VK/YouTube')
                 .setRequired(true)
         ),
 
@@ -172,6 +173,44 @@ function formatTrack(track) {
     return `${author} — ${title} \`${duration}\``;
 }
 
+function extractQueryCandidate(query) {
+
+    const trimmedQuery = query.trim();
+    const markdownLinkMatch = trimmedQuery.match(/^\[[^\]]+\]\((https?:\/\/[^)\s]+)\)$/i);
+    const rawUrlMatch = trimmedQuery.match(/https?:\/\/\S+/i);
+
+    return markdownLinkMatch
+        ? markdownLinkMatch[1]
+        : rawUrlMatch
+            ? rawUrlMatch[0].replace(/[>)\].,]+$/g, '')
+            : trimmedQuery;
+}
+
+function isYoutubeUrl(candidate) {
+
+    return /^https?:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//i.test(candidate) ||
+        /^https?:\/\/music\.youtube\.com\//i.test(candidate);
+}
+
+function getPlayableIdentifier(query) {
+
+    const trimmedQuery = query.trim();
+    const candidate = extractQueryCandidate(trimmedQuery);
+
+    if (/^https?:\/\/(www\.)?(vk\.com|vk\.ru)\//i.test(candidate)) {
+        return candidate.replace(
+            /^https?:\/\/(www\.)?vk\.ru\//i,
+            'https://vk.com/'
+        );
+    }
+
+    if (isYoutubeUrl(candidate)) {
+        return candidate;
+    }
+
+    return `ytsearch:${trimmedQuery}`;
+}
+
 function getGuildQueue(guildId) {
 
     let queue = queues.get(guildId);
@@ -184,6 +223,7 @@ function getGuildQueue(guildId) {
             textChannelId: null,
             voiceChannelId: null,
             player: null,
+            idleTimer: null,
             destroyed: false
         };
 
@@ -238,6 +278,47 @@ async function sendToQueueChannel(guildId, message) {
     }
 }
 
+function clearIdleTimer(queue) {
+
+    if (queue.idleTimer) {
+        clearTimeout(queue.idleTimer);
+        queue.idleTimer = null;
+    }
+}
+
+function scheduleIdleDisconnect(guildId) {
+
+    const queue = queues.get(guildId);
+
+    if (!queue || queue.destroyed || queue.current || queue.tracks.length > 0) {
+        return;
+    }
+
+    clearIdleTimer(queue);
+
+    queue.idleTimer = setTimeout(async () => {
+
+        const latestQueue = queues.get(guildId);
+
+        if (
+            !latestQueue ||
+            latestQueue.destroyed ||
+            latestQueue.current ||
+            latestQueue.tracks.length > 0
+        ) {
+            return;
+        }
+
+        await sendToQueueChannel(
+            guildId,
+            'Выхожу из голосового канала: 5 минут ничего не играло.'
+        );
+
+        await destroyQueue(guildId);
+
+    }, IDLE_TIMEOUT_MS);
+}
+
 async function destroyQueue(guildId) {
 
     const queue = queues.get(guildId);
@@ -249,6 +330,7 @@ async function destroyQueue(guildId) {
     queue.destroyed = true;
     queue.current = null;
     queue.tracks = [];
+    clearIdleTimer(queue);
 
     if (queue.player) {
         await queue.player.destroy().catch(() => null);
@@ -271,15 +353,11 @@ async function playNext(guildId) {
 
         queue.current = null;
         await sendToQueueChannel(guildId, 'Очередь закончилась.');
-
-        if (queue.player) {
-            await queue.player.destroy().catch(() => null);
-        }
-
-        queues.delete(guildId);
+        scheduleIdleDisconnect(guildId);
         return;
     }
 
+    clearIdleTimer(queue);
     queue.current = nextTrack;
 
     await queue.player.playTrack({
@@ -302,6 +380,13 @@ function bindPlayerEvents(player, guildId) {
 
     player.queueEventsBound = true;
 
+    player.on('start', event => {
+        console.log(`[Lavalink] Трек запущен (${guildId}):`, {
+            track: event.track,
+            timestamp: Date.now()
+        });
+    });
+
     player.on('end', async event => {
 
         if (event.reason === 'replaced') {
@@ -319,15 +404,24 @@ function bindPlayerEvents(player, guildId) {
         await playNext(guildId);
     });
 
-    player.on('exception', async () => {
+    player.on('exception', async event => {
+        console.error(`[Lavalink] Ошибка трека (${guildId}):`, event);
+
         await sendToQueueChannel(
             guildId,
             'Не удалось воспроизвести трек, включаю следующий.'
         );
+
         await playNext(guildId);
     });
 
     player.on('closed', async () => {
+        const queue = queues.get(guildId);
+
+        if (queue) {
+            clearIdleTimer(queue);
+        }
+
         queues.delete(guildId);
     });
 }
@@ -373,6 +467,7 @@ async function ensurePlayer(interaction, voiceChannel) {
     queue.voiceChannelId = voiceChannel.id;
     queue.textChannelId = interaction.channelId;
     queue.destroyed = false;
+    clearIdleTimer(queue);
 
     return queue;
 }
@@ -478,13 +573,9 @@ client.on('interactionCreate', async interaction => {
                 );
 
 
-            // Если это ссылка VK — используем как есть.
-            // Иначе выполняем поиск VK.
+            // VK/YouTube ссылки используем как есть, обычный текст ищем в YouTube.
 
-            const identifier =
-                /^https?:\/\/(vk\.com|vk\.ru)\//i.test(query)
-                    ? query
-                    : `vksearch:${query}`;
+            const identifier = getPlayableIdentifier(query);
 
 
             console.log(
